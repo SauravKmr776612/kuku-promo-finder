@@ -89,15 +89,16 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
     progress = st.progress(0, text="Preparing scripts…")
 
     for index, uploaded_file in enumerate(selected_uploads):
+        script = uploaded_file.getvalue().decode("utf-8-sig", errors="replace")
+        label = episode_label(uploaded_file.name, script)
+
         if index:
             progress.progress(
-                index / len(selected_uploads),
-                text=f"Waiting 13 seconds to respect Gemini's request limit…",
+                (index - 1) / len(selected_uploads),
+                text=f"Waiting 13 seconds before episode {index + 1}/{len(selected_uploads)}: {label}",
             )
             time.sleep(13)
 
-        script = uploaded_file.getvalue().decode("utf-8-sig", errors="replace")
-        label = episode_label(uploaded_file.name, script)
         events = parse_timeline(script)
         if not events:
             failures.append(
@@ -107,6 +108,13 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
             continue
 
         try:
+            progress.progress(
+                index / len(selected_uploads),
+                text=(
+                    f"Sending episode {index + 1}/{len(selected_uploads)}: {label} "
+                    "(Gemini may take a while to respond)"
+                ),
+            )
             prompt = build_prompt(label, events)
             config = types.GenerateContentConfig(
                 response_mime_type="application/json",
