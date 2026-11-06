@@ -7,10 +7,10 @@ from datetime import datetime, timezone
 import streamlit as st
 
 from promo_core import (
-    build_prompt,
+    build_batch_prompt,
     call_with_retries,
     episode_label,
-    parse_model_result,
+    parse_batch_model_result,
     parse_timeline,
 )
 
@@ -49,9 +49,12 @@ with st.sidebar:
     max_episodes = st.number_input(
         "Maximum episodes to process per run", min_value=1, max_value=50, value=50
     )
+    episodes_per_request = st.number_input(
+        "Episodes per Gemini request", min_value=1, max_value=5, value=5
+    )
     st.caption(
-        "Free-tier Gemini allows a limited number of requests per minute. "
-        "The app spaces requests and retries temporary overload/quota errors."
+        "Batches reduce API calls and waiting. Requests are spaced and temporary "
+        "overload/quota errors are retried."
     )
 
 uploads = st.file_uploader(
@@ -87,35 +90,48 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
     results = []
     failures = []
     progress = st.progress(0, text="Preparing scripts…")
+    prepared = []
 
-    for index, uploaded_file in enumerate(selected_uploads):
+    for uploaded_file in selected_uploads:
         script = uploaded_file.getvalue().decode("utf-8-sig", errors="replace")
         label = episode_label(uploaded_file.name, script)
-
-        if index:
-            progress.progress(
-                (index - 1) / len(selected_uploads),
-                text=f"Waiting 13 seconds before episode {index + 1}/{len(selected_uploads)}: {label}",
-            )
-            time.sleep(13)
-
         events = parse_timeline(script)
         if not events:
             failures.append(
                 {"file": uploaded_file.name, "error": "No timestamped screenplay events found."}
             )
-            progress.progress((index + 1) / len(selected_uploads), text=f"Skipped {label}")
             continue
+        prepared.append(
+            {
+                "episode": label,
+                "source_file": uploaded_file.name,
+                "events": events,
+            }
+        )
 
+    batch_size = int(episodes_per_request)
+    batches = [
+        prepared[start:start + batch_size]
+        for start in range(0, len(prepared), batch_size)
+    ]
+    for batch_index, batch in enumerate(batches):
+        if batch_index:
+            progress.progress(
+                batch_index / len(batches),
+                text=f"Waiting before request batch {batch_index + 1}/{len(batches)}…",
+            )
+            time.sleep(13)
+
+        episode_events = {item["episode"]: item["events"] for item in batch}
         try:
             progress.progress(
-                index / len(selected_uploads),
+                batch_index / len(batches),
                 text=(
-                    f"Sending episode {index + 1}/{len(selected_uploads)}: {label} "
-                    "(Gemini may take a while to respond)"
+                    f"Sending batch {batch_index + 1}/{len(batches)} "
+                    f"({len(batch)} episodes; Gemini may take a while to respond)"
                 ),
             )
-            prompt = build_prompt(label, events)
+            prompt = build_batch_prompt(episode_events)
             config = types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.2,
@@ -128,26 +144,37 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
                 )
             )
             raw_response = response.text or ""
-            promos, validation_warnings = parse_model_result(raw_response, events)
+            promos, validation_warnings = parse_batch_model_result(
+                raw_response, episode_events
+            )
+            source_by_episode = {item["episode"]: item["source_file"] for item in batch}
             for promo in promos:
-                promo.update({"episode": label, "source_file": uploaded_file.name})
-            results.append(
+                promo["source_file"] = source_by_episode[promo["episode"]]
+            promos_by_episode = {item["episode"]: [] for item in batch}
+            for promo in promos:
+                promos_by_episode[promo["episode"]].append(promo)
+            results.extend(
                 {
-                    "episode": label,
-                    "source_file": uploaded_file.name,
-                    "promos": promos,
+                    "episode": item["episode"],
+                    "source_file": item["source_file"],
+                    "promos": promos_by_episode[item["episode"]],
                     "raw_model_response": raw_response,
                     "validation_warnings": validation_warnings,
                 }
+                for item in batch
             )
         except Exception as exc:
-            failures.append(
+            failures.extend(
                 {
-                    "file": uploaded_file.name,
+                    "file": item["source_file"],
                     "error": f"{type(exc).__name__}: {exc}",
                 }
+                for item in batch
             )
-        progress.progress((index + 1) / len(selected_uploads), text=f"Processed {label}")
+        progress.progress(
+            (batch_index + 1) / len(batches),
+            text=f"Finished request batch {batch_index + 1}/{len(batches)}",
+        )
 
     ranked = sorted(
         (promo for result in results for promo in result["promos"]),

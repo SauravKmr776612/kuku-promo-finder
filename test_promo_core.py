@@ -2,8 +2,10 @@ import unittest
 
 from promo_core import (
     TimelineEvent,
+    build_batch_prompt,
     call_with_retries,
     episode_label,
+    parse_batch_model_result,
     parse_model_result,
     parse_timeline,
     timestamp_to_seconds,
@@ -85,6 +87,28 @@ She turns and leaves.
         self.assertEqual(accepted[0]["duration_seconds"], 35.0)
         self.assertEqual(len(rejected), 1)
         self.assertAlmostEqual(timestamp_to_seconds("00:35.00"), 35)
+
+    def test_batch_prompt_and_results_keep_episode_boundaries(self):
+        events = [
+            TimelineEvent("00:00.00", "00:22.00", "DIALOGUE", "Opening."),
+            TimelineEvent("00:22.00", "00:35.00", "ACTION", "She leaves."),
+        ]
+        episodes = {"Episode 1": events, "Episode 2": events}
+        prompt = build_batch_prompt(episodes)
+        self.assertIn('"Episode 1"', prompt)
+        self.assertIn('"Episode 2"', prompt)
+
+        raw = """{"promos":[
+          {"episode":"Episode 2","start_time":"00:00.00","end_time":"00:35.00",
+           "hook":"A betrayal","cliffhanger":"She leaves",
+           "why_it_works":"Clear stakes","score":8},
+          {"episode":"Episode 9","start_time":"00:00.00","end_time":"00:35.00",
+           "hook":"Hook","cliffhanger":"End","why_it_works":"Reason","score":7}
+        ]}"""
+        accepted, rejected = parse_batch_model_result(raw, episodes)
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]["episode"], "Episode 2")
+        self.assertEqual(len(rejected), 1)
 
 
 if __name__ == "__main__":

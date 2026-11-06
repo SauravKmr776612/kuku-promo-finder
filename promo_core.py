@@ -105,6 +105,25 @@ TIMELINE:
 """
 
 
+def build_batch_prompt(episodes: dict[str, list[TimelineEvent]]) -> str:
+    timelines = {
+        episode: [asdict(event) for event in events]
+        for episode, events in episodes.items()
+    }
+    return f"""You are helping a human editor find short social-media promos in fictional microdrama screenplays.
+
+Review all episodes below and find up to 3 distinct, strong, continuous promo clips per episode. Each clip must be 20 to 60 seconds long. Favor an immediate hook (especially in the first 3 seconds), a clear unresolved cliffhanger, and enough context to make sense to a new viewer. Do not invent plot details or dialogue.
+
+Use only start and end timestamps from the named episode's timeline. Each promo must include the exact episode name shown as a JSON key below. Rank all returned promos by strength, best first. Give a concise hook, cliffhanger, and reason grounded in the script. score is an integer from 1 to 10. Return JSON only in this shape:
+{{"promos":[{{"episode":"Episode 1","start_time":"00:00.00","end_time":"00:30.00","hook":"...","cliffhanger":"...","why_it_works":"...","score":8}}]}}
+
+If no valid promo exists, return {{"promos":[]}}.
+
+EPISODE TIMELINES:
+{json.dumps(timelines, ensure_ascii=False)}
+"""
+
+
 def parse_model_result(
     raw_response: str, events: list[TimelineEvent]
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -155,4 +174,38 @@ def parse_model_result(
                 "score": score,
             }
         )
+    return accepted, rejected
+
+
+def parse_batch_model_result(
+    raw_response: str, episodes: dict[str, list[TimelineEvent]]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    cleaned = raw_response.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
+    data = json.loads(cleaned)
+    if not isinstance(data, dict) or not isinstance(data.get("promos"), list):
+        raise ValueError("Gemini response must contain a 'promos' list.")
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    rejected: list[str] = []
+    for index, promo in enumerate(data["promos"], start=1):
+        if not isinstance(promo, dict):
+            rejected.append(f"Promo {index}: response item was not an object.")
+            continue
+        episode = promo.get("episode")
+        if episode not in episodes:
+            rejected.append(f"Promo {index}: episode did not match a submitted episode.")
+            continue
+        grouped.setdefault(episode, []).append(promo)
+
+    accepted: list[dict[str, Any]] = []
+    for episode, promos in grouped.items():
+        validated, warnings = parse_model_result(
+            json.dumps({"promos": promos}), episodes[episode]
+        )
+        for promo in validated:
+            promo["episode"] = episode
+            accepted.append(promo)
+        rejected.extend(f"{episode}: {warning}" for warning in warnings)
     return accepted, rejected
