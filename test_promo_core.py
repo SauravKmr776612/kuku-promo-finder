@@ -56,6 +56,25 @@ class PromoCoreTests(unittest.TestCase):
             call_with_retries(lambda: (_ for _ in ()).throw(FakeError()), sleep=delays.append)
         self.assertEqual(delays, [])
 
+    def test_does_not_retry_daily_quota_exhaustion(self):
+        class FakeError(Exception):
+            code = 429
+
+            def __str__(self):
+                return "Generate content requests per day limit exceeded."
+
+        calls = []
+        delays = []
+
+        def request():
+            calls.append(None)
+            raise FakeError()
+
+        with self.assertRaises(FakeError):
+            call_with_retries(request, sleep=delays.append)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(delays, [])
+
     def test_parse_timestamped_events_and_label(self):
         script = """EPISODE NUMBER: Episode 7
 **LADY JULIANA (Angry):**

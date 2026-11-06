@@ -37,6 +37,9 @@ def call_with_retries(
             return request()
         except Exception as exc:
             status_code = getattr(exc, "code", None)
+            error_message = str(exc).lower()
+            if status_code == 429 and "per day limit exceeded" in error_message:
+                raise
             if status_code not in (429, 503) or attempt == max_attempts - 1:
                 raise
 

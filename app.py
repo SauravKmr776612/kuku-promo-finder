@@ -100,6 +100,7 @@ if st.button("Find promos in one request", type="primary", disabled=not uploads)
     raw_response = ""
     validation_warnings = []
     promos_by_episode = {episode: [] for episode in episode_events}
+    request_failed = False
     if episode_events:
         try:
             prompt = build_batch_prompt(episode_events)
@@ -130,15 +131,15 @@ if st.button("Find promos in one request", type="primary", disabled=not uploads)
                 promo["source_file"] = source_by_episode[promo["episode"]]
                 promos_by_episode[promo["episode"]].append(promo)
         except Exception as exc:
-            failures.extend(
+            request_failed = True
+            failures.append(
                 {
-                    "file": source_by_episode[episode],
+                    "file": f"One request for {len(episode_events)} episodes",
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-                for episode in episode_events
             )
 
-    results = [
+    results = [] if request_failed else [
         {
             "episode": episode,
             "source_file": source_by_episode[episode],
