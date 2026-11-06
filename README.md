@@ -16,7 +16,7 @@ A Streamlit prototype that asks Gemini to suggest promo moments from timestamped
 4. Run `streamlit run app.py`.
 5. Upload the folder containing the `.txt` episode files. The app sorts files by episode number and processes up to 50 by default. You can also select multiple individual `.txt` files.
 
-Episodes are grouped into Gemini requests (five per request by default), reducing 50 episodes to about 10 calls. Calls are spaced by 13 seconds to stay within the example free-tier limit of five requests per minute, and temporary 429/503 errors are retried. A full-pack run can still take a few minutes or longer depending on Gemini response time. Actual quotas vary by account and model. Valid candidates from all successfully processed episodes are ranked together.
+All selected episodes are sent together in one Gemini request, so a full-pack run uses one API call rather than 50. The 50-script prompt is large (about 593,000 characters for the supplied pack), so Gemini may still take time to process it and the API may reject it if the account/model input limit is lower. The app displays the prompt size and reports any API error. Temporary 429/503 errors are retried. Valid candidates are ranked together across episodes.
 
 The app does not bundle the assignment's scripts. The script folder is excluded from Git; do not publish or share Kuku's input pack.
 

@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import time
 from datetime import datetime, timezone
 
 import streamlit as st
@@ -49,13 +48,7 @@ with st.sidebar:
     max_episodes = st.number_input(
         "Maximum episodes to process per run", min_value=1, max_value=50, value=50
     )
-    episodes_per_request = st.number_input(
-        "Episodes per Gemini request", min_value=1, max_value=5, value=5
-    )
-    st.caption(
-        "Batches reduce API calls and waiting. Requests are spaced and temporary "
-        "overload/quota errors are retried."
-    )
+    st.caption("All selected episodes are analyzed together in one Gemini request.")
 
 uploads = st.file_uploader(
     "Choose the folder containing episode screenplay files",
@@ -70,7 +63,7 @@ if uploads:
         f"{int(max_episodes)} episodes in this run."
     )
 
-if st.button("Find promo candidates across episodes", type="primary", disabled=not uploads):
+if st.button("Find promos in one request", type="primary", disabled=not uploads):
     if not api_key:
         st.error(
             "The app owner must configure GEMINI_API_KEY in Streamlit Secrets "
@@ -87,10 +80,10 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
 
     client = genai.Client(api_key=api_key)
     selected_uploads = sorted(uploads, key=episode_sort_key)[: int(max_episodes)]
-    results = []
+    episode_events = {}
+    source_by_episode = {}
     failures = []
     progress = st.progress(0, text="Preparing scripts…")
-    prepared = []
 
     for uploaded_file in selected_uploads:
         script = uploaded_file.getvalue().decode("utf-8-sig", errors="replace")
@@ -101,37 +94,23 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
                 {"file": uploaded_file.name, "error": "No timestamped screenplay events found."}
             )
             continue
-        prepared.append(
-            {
-                "episode": label,
-                "source_file": uploaded_file.name,
-                "events": events,
-            }
-        )
+        episode_events[label] = events
+        source_by_episode[label] = uploaded_file.name
 
-    batch_size = int(episodes_per_request)
-    batches = [
-        prepared[start:start + batch_size]
-        for start in range(0, len(prepared), batch_size)
-    ]
-    for batch_index, batch in enumerate(batches):
-        if batch_index:
-            progress.progress(
-                batch_index / len(batches),
-                text=f"Waiting before request batch {batch_index + 1}/{len(batches)}…",
-            )
-            time.sleep(13)
-
-        episode_events = {item["episode"]: item["events"] for item in batch}
+    raw_response = ""
+    validation_warnings = []
+    promos_by_episode = {episode: [] for episode in episode_events}
+    if episode_events:
         try:
+            prompt = build_batch_prompt(episode_events)
+            prompt_chars = len(prompt)
             progress.progress(
-                batch_index / len(batches),
+                0.1,
                 text=(
-                    f"Sending batch {batch_index + 1}/{len(batches)} "
-                    f"({len(batch)} episodes; Gemini may take a while to respond)"
+                    f"Sending one request for {len(episode_events)} episodes "
+                    f"({prompt_chars:,} prompt characters). Gemini may take a while."
                 ),
             )
-            prompt = build_batch_prompt(episode_events)
             config = types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.2,
@@ -147,34 +126,28 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
             promos, validation_warnings = parse_batch_model_result(
                 raw_response, episode_events
             )
-            source_by_episode = {item["episode"]: item["source_file"] for item in batch}
             for promo in promos:
                 promo["source_file"] = source_by_episode[promo["episode"]]
-            promos_by_episode = {item["episode"]: [] for item in batch}
-            for promo in promos:
                 promos_by_episode[promo["episode"]].append(promo)
-            results.extend(
-                {
-                    "episode": item["episode"],
-                    "source_file": item["source_file"],
-                    "promos": promos_by_episode[item["episode"]],
-                    "raw_model_response": raw_response,
-                    "validation_warnings": validation_warnings,
-                }
-                for item in batch
-            )
         except Exception as exc:
             failures.extend(
                 {
-                    "file": item["source_file"],
+                    "file": source_by_episode[episode],
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-                for item in batch
+                for episode in episode_events
             )
-        progress.progress(
-            (batch_index + 1) / len(batches),
-            text=f"Finished request batch {batch_index + 1}/{len(batches)}",
-        )
+
+    results = [
+        {
+            "episode": episode,
+            "source_file": source_by_episode[episode],
+            "promos": promos_by_episode[episode],
+            "validation_warnings": validation_warnings,
+        }
+        for episode in episode_events
+    ]
+    progress.progress(1.0, text="Analysis finished.")
 
     ranked = sorted(
         (promo for result in results for promo in result["promos"]),
@@ -187,6 +160,7 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
         "results": results,
         "ranked_promos": ranked,
         "failures": failures,
+        "raw_model_response": raw_response,
     }
 
 run = st.session_state.get("promo_run")
@@ -204,9 +178,12 @@ if run:
             st.markdown(f"**Cliffhanger:** {promo['cliffhanger']}")
             st.markdown(f"**Why it works:** {promo['why_it_works']}")
 
-    for result in run["results"]:
-        for warning in result["validation_warnings"]:
-            st.warning(f"{result['episode']}: {warning}")
+    for warning in dict.fromkeys(
+        warning
+        for result in run["results"]
+        for warning in result["validation_warnings"]
+    ):
+        st.warning(warning)
     if run["failures"]:
         st.subheader("Files that could not be processed")
         st.json(run["failures"])
