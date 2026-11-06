@@ -38,7 +38,7 @@ with st.sidebar:
         st.success("Gemini API configured")
     else:
         st.warning("Gemini API key is not configured.")
-    model_name = st.text_input("Gemini model", value="gemini-2.5-flash")
+    model_name = st.text_input("Gemini model", value="gemini-3.8-flash")
     max_episodes = st.number_input(
         "Maximum episodes to process per run", min_value=1, max_value=50, value=50
     )
