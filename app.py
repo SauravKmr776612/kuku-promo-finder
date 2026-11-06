@@ -1,11 +1,18 @@
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 
 import streamlit as st
 
-from promo_core import build_prompt, episode_label, parse_model_result, parse_timeline
+from promo_core import (
+    build_prompt,
+    call_with_retries,
+    episode_label,
+    parse_model_result,
+    parse_timeline,
+)
 
 
 st.set_page_config(page_title="Promo Finder", page_icon="🎬", layout="wide")
@@ -42,7 +49,10 @@ with st.sidebar:
     max_episodes = st.number_input(
         "Maximum episodes to process per run", min_value=1, max_value=50, value=50
     )
-    st.caption("Each episode makes a separate Gemini request. Lower this to limit API usage.")
+    st.caption(
+        "Free-tier Gemini allows a limited number of requests per minute. "
+        "The app spaces requests and retries temporary overload/quota errors."
+    )
 
 uploads = st.file_uploader(
     "Choose the folder containing episode screenplay files",
@@ -79,6 +89,13 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
     progress = st.progress(0, text="Preparing scripts…")
 
     for index, uploaded_file in enumerate(selected_uploads):
+        if index:
+            progress.progress(
+                index / len(selected_uploads),
+                text=f"Waiting 13 seconds to respect Gemini's request limit…",
+            )
+            time.sleep(13)
+
         script = uploaded_file.getvalue().decode("utf-8-sig", errors="replace")
         label = episode_label(uploaded_file.name, script)
         events = parse_timeline(script)
@@ -90,13 +107,17 @@ if st.button("Find promo candidates across episodes", type="primary", disabled=n
             continue
 
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=build_prompt(label, events),
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.2,
-                ),
+            prompt = build_prompt(label, events)
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.2,
+            )
+            response = call_with_retries(
+                lambda: client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=config,
+                )
             )
             raw_response = response.text or ""
             promos, validation_warnings = parse_model_result(raw_response, events)

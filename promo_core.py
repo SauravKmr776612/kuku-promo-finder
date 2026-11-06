@@ -1,7 +1,11 @@
 import json
 import re
+import time
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+
+T = TypeVar("T")
 
 
 TIMESTAMP_PATTERN = re.compile(
@@ -21,6 +25,29 @@ class TimelineEvent:
 def timestamp_to_seconds(timestamp: str) -> float:
     minutes, seconds = timestamp.split(":")
     return int(minutes) * 60 + float(seconds)
+
+
+def call_with_retries(
+    request: Callable[[], T],
+    sleep: Callable[[float], None] = time.sleep,
+    max_attempts: int = 3,
+) -> T:
+    for attempt in range(max_attempts):
+        try:
+            return request()
+        except Exception as exc:
+            status_code = getattr(exc, "code", None)
+            if status_code not in (429, 503) or attempt == max_attempts - 1:
+                raise
+
+            if status_code == 429:
+                match = re.search(r"retry in ([\d.]+)s", str(exc), re.IGNORECASE)
+                delay = float(match.group(1)) + 1 if match else 60
+            else:
+                delay = 5 * (2**attempt)
+            sleep(delay)
+
+    raise RuntimeError("Request retry loop ended unexpectedly.")
 
 
 def parse_timeline(script: str) -> list[TimelineEvent]:

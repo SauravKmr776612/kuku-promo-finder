@@ -2,6 +2,7 @@ import unittest
 
 from promo_core import (
     TimelineEvent,
+    call_with_retries,
     episode_label,
     parse_model_result,
     parse_timeline,
@@ -10,6 +11,49 @@ from promo_core import (
 
 
 class PromoCoreTests(unittest.TestCase):
+    def test_retries_temporary_server_error(self):
+        class FakeError(Exception):
+            code = 503
+
+        calls = []
+        delays = []
+
+        def request():
+            calls.append(None)
+            if len(calls) == 1:
+                raise FakeError("temporary overload")
+            return "success"
+
+        result = call_with_retries(request, sleep=delays.append)
+        self.assertEqual(result, "success")
+        self.assertEqual(delays, [5])
+
+    def test_uses_retry_delay_for_rate_limit_error(self):
+        class FakeError(Exception):
+            code = 429
+
+        calls = []
+        delays = []
+
+        def request():
+            calls.append(None)
+            if len(calls) == 1:
+                raise FakeError("Please retry in 44.5s.")
+            return "success"
+
+        result = call_with_retries(request, sleep=delays.append)
+        self.assertEqual(result, "success")
+        self.assertEqual(delays, [45.5])
+
+    def test_does_not_retry_other_errors(self):
+        class FakeError(Exception):
+            code = 400
+
+        delays = []
+        with self.assertRaises(FakeError):
+            call_with_retries(lambda: (_ for _ in ()).throw(FakeError()), sleep=delays.append)
+        self.assertEqual(delays, [])
+
     def test_parse_timestamped_events_and_label(self):
         script = """EPISODE NUMBER: Episode 7
 **LADY JULIANA (Angry):**
