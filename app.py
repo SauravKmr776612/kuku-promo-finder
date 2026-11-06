@@ -13,20 +13,22 @@ from promo_core import (
     parse_timeline,
 )
 
+DEFAULT_MODEL = "glm5.3-flash"
+
 
 st.set_page_config(page_title="Promo Finder", page_icon="🎬", layout="wide")
 st.title("🎬 Microdrama Promo Finder")
 st.caption(
-    "Upload screenplay .txt files to shortlist promo moments. Gemini suggests candidates; "
+    "Upload screenplay .txt files to shortlist promo moments. Sarvam suggests candidates; "
     "timestamp and duration checks are enforced in code."
 )
 
 
 def configured_api_key() -> str:
     try:
-        return st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+        return st.secrets.get("SARVAM_API_KEY", os.getenv("SARVAM_API_KEY", ""))
     except FileNotFoundError:
-        return os.getenv("GEMINI_API_KEY", "")
+        return os.getenv("SARVAM_API_KEY", "")
 
 
 def episode_sort_key(uploaded_file):
@@ -41,14 +43,14 @@ api_key = configured_api_key()
 with st.sidebar:
     st.header("Settings")
     if api_key:
-        st.success("Gemini API configured")
+        st.success("Sarvam API configured")
     else:
-        st.warning("Gemini API key is not configured.")
-    model_name = st.text_input("Gemini model", value="gemini-3.8-flash")
+        st.warning("Sarvam API key is not configured.")
+    model_name = st.text_input("Sarvam model", value=DEFAULT_MODEL)
     max_episodes = st.number_input(
         "Maximum episodes to process per run", min_value=1, max_value=50, value=50
     )
-    st.caption("All selected episodes are analyzed together in one Gemini request.")
+    st.caption("All selected episodes are analyzed together in one Sarvam request.")
 
 uploads = st.file_uploader(
     "Choose the folder containing episode screenplay files",
@@ -66,19 +68,18 @@ if uploads:
 if st.button("Find promos in one request", type="primary", disabled=not uploads):
     if not api_key:
         st.error(
-            "The app owner must configure GEMINI_API_KEY in Streamlit Secrets "
+            "The app owner must configure SARVAM_API_KEY in Streamlit Secrets "
             "or as a local environment variable."
         )
         st.stop()
     try:
-        from google import genai
-        from google.genai import types
+        from sarvamai import SarvamAI
     except ImportError as exc:
-        st.error("Gemini SDK is missing. Install dependencies from requirements.txt.")
+        st.error("Sarvam SDK is missing. Install dependencies from requirements.txt.")
         st.exception(exc)
         st.stop()
 
-    client = genai.Client(api_key=api_key)
+    client = SarvamAI(api_subscription_key=api_key, timeout=300.0)
     selected_uploads = sorted(uploads, key=episode_sort_key)[: int(max_episodes)]
     episode_events = {}
     source_by_episode = {}
@@ -109,21 +110,20 @@ if st.button("Find promos in one request", type="primary", disabled=not uploads)
                 0.1,
                 text=(
                     f"Sending one request for {len(episode_events)} episodes "
-                    f"({prompt_chars:,} prompt characters). Gemini may take a while."
+                    f"({prompt_chars:,} prompt characters). Sarvam may take a while."
                 ),
             )
-            config = types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.2,
-            )
             response = call_with_retries(
-                lambda: client.models.generate_content(
+                lambda: client.chat.completions_v2(
                     model=model_name,
-                    contents=prompt,
-                    config=config,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    reasoning_effort="low",
+                    max_tokens=16000,
+                    response_format={"type": "json_object"},
                 )
             )
-            raw_response = response.text or ""
+            raw_response = response.choices[0].message.content or ""
             promos, validation_warnings = parse_batch_model_result(
                 raw_response, episode_events
             )
@@ -200,6 +200,6 @@ if run:
 st.divider()
 st.caption(
     "Prototype limits: currently finds single continuous segments, not stitched multi-episode "
-    "promos. Always review candidates manually. Uploaded screenplay text is sent to Google "
-    "Gemini for analysis; use only inputs you are authorized to process."
+    "promos. Always review candidates manually. Uploaded screenplay text is sent to Sarvam "
+    "for analysis; use only inputs you are authorized to process."
 )

@@ -135,7 +135,7 @@ def parse_model_result(
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
     data = json.loads(cleaned)
     if not isinstance(data, dict) or not isinstance(data.get("promos"), list):
-        raise ValueError("Gemini response must contain a 'promos' list.")
+        raise ValueError("Model response must contain a 'promos' list.")
 
     boundaries = {event.start for event in events} | {event.end for event in events}
     accepted: list[dict[str, Any]] = []
@@ -188,7 +188,7 @@ def parse_batch_model_result(
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
     data = json.loads(cleaned)
     if not isinstance(data, dict) or not isinstance(data.get("promos"), list):
-        raise ValueError("Gemini response must contain a 'promos' list.")
+        raise ValueError("Model response must contain a 'promos' list.")
 
     grouped: dict[str, list[dict[str, Any]]] = {}
     rejected: list[str] = []
